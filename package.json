@@ -1,0 +1,18 @@
+{
+  "name": "shopware-static-analysis-prototype",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "scan": "node src/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "description": "An example prototype to utilize tree-sitter to query data about the shopware codebase and visualize it.",
+  "dependencies": {
+    "globby": "^14.1.0",
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-php": "^0.23.11"
+  }
+}
