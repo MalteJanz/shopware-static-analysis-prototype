@@ -14,7 +14,7 @@ const fileSortedByNamespace = [...classDefinitions.entries()].sort((a, b) => {
     const aString = (a[1].namespace || a[1].fileName).toLowerCase();
     const bString = (b[1].namespace || b[1].fileName).toLowerCase();
 
-    return bString.localeCompare(aString);
+    return aString.localeCompare(bString);
 });
 
 const domainBuckets = [...classDefinitions.entries()].reduce((acc, [filename, classInfo]) => {
@@ -57,6 +57,10 @@ const htmlReport = `<!doctype html>
         th { 
             background-color: #333; 
             color: #ffffff; 
+        }
+        
+        .not-internal {
+            background-color: #585858;
         }
         
         .domain-framework, .domain-fundamentals--framework {
@@ -112,7 +116,7 @@ const htmlReport = `<!doctype html>
                 <th>Domain</th>
                 <th>Namespace / Path</th>
                 <th>Classname</th>
-                <th>Is Internal</th>
+                <th>Internal / Private / Final</th>
             </tr>
         </thead>
         <tbody>
@@ -121,7 +125,7 @@ const htmlReport = `<!doctype html>
                     <td class="domain-${(classInfo.domain || 'unknown').replace('@', '--')}">${classInfo.domain || 'unknown'}</td>
                     <td>${classInfo.namespace || classInfo.fileName}</td>
                     <td>${classInfo.className || 'N/A'}</td>
-                    <td>${classInfo.isInternal ? 'Yes' : 'No'}</td>
+                    <td class="${(classInfo.isInternal || classInfo.isFinal) ? 'is-internal' : 'not-internal'}">${(classInfo.isInternal || classInfo.isFinal) ? 'Yes' : 'No'}</td>
                 </tr>`).join('')}
         </tbody>
     </table>

@@ -45,6 +45,7 @@ const classDefinitionQuery = new Query(Php, `(
           )
         )
       )
+    (final_modifier)? @finalkeyword
     name: (name) @classname
   )
 )`);
@@ -57,6 +58,7 @@ const frontendDefinitionQuery = new Query(TypeScript, `(program
  *
  * @typedef Definitions {Map<string, {
  *    isInternal: boolean,
+ *    isFinal: boolean,
  *    namespace: string,
  *    className: string,
  *    fileName: string,
@@ -64,27 +66,30 @@ const frontendDefinitionQuery = new Query(TypeScript, `(program
  * }>}
  */
 
-function queryClassDefinitions(tree, fileName, resultMap) {
+function queryClassDefinitions(tree, globPath, filePath, resultMap) {
     const queryCaptures = classDefinitionQuery.captures(tree.rootNode);
 
-    const comments = queryCaptures.filter(c => c.name === 'comment');
-    const isInternal = comments.some(c => c.node.text.includes('@internal'));
+    const isFinalKeyword = !!queryCaptures.find(c => c.name === 'finalkeyword');
     const namespace = queryCaptures.find(c => c.name === 'namespace')?.node?.text;
     const className = queryCaptures.find(c => c.name === 'classname')?.node?.text;
     const package_domain = queryCaptures.find(c => c.name === 'package')?.node?.text;
+    const comments = queryCaptures.filter(c => c.name === 'comment');
+    const isInternal = comments.some(c => c.node.text.includes('@internal'));
+    const isFinalComment = comments.some(c => c.node.text.includes('@final'));
 
     if (!namespace || !className) return;
 
     resultMap.set(`${namespace}\\${className}`, {
         isInternal,
+        isFinal: isFinalKeyword || isFinalComment,
         namespace,
         className,
-        fileName,
+        fileName: globPath,
         domain: package_domain,
     });
 }
 
-function queryFrontendDefinitions(tree, fileName, resultMap) {
+function queryFrontendDefinitions(tree, globPath, filePath, resultMap) {
     const queryCaptures = frontendDefinitionQuery.captures(tree.rootNode);
 
     const topLevelComments = queryCaptures.filter(c => c.name === 'comment');
@@ -97,11 +102,12 @@ function queryFrontendDefinitions(tree, fileName, resultMap) {
     const domain = topLevelComments.map(c => c.node.text.match(domainRegex))
         .find(match => match)?.[1] || null;
 
-    resultMap.set(fileName, {
+    resultMap.set(filePath, {
         isInternal,
+        isFinal: null,
         namespace: null,
         className: null,
-        fileName,
+        fileName: globPath,
         domain,
     });
 }
@@ -127,7 +133,7 @@ async function scanFiles(dir, callback) {
                 return;
             }
 
-            callback(fullPath, data);
+            callback(p, fullPath, data);
         });
     }
 }
@@ -140,23 +146,23 @@ async function scan(pathToScan) {
     let frontendFileCount = 0;
     /** @type {Definitions} */
     const classDefinitions = new Map();
-    await scanFiles(pathToScan, (filename, content) => {
+    await scanFiles(pathToScan, (globPath, filePath, content) => {
         try {
-            const filetype = path.extname(filename);
+            const filetype = path.extname(filePath);
 
             if (filetype === '.php') {
                 parser.setLanguage(Php);
                 const tree = parser.parse(content, undefined, parseOptions);
-                queryClassDefinitions(tree, filename, classDefinitions);
+                queryClassDefinitions(tree, globPath, filePath, classDefinitions);
                 phpFileCount++;
             } else if (['.js', '.ts'].includes(filetype)) {
                 parser.setLanguage(TypeScript);
                 const tree = parser.parse(content, undefined, parseOptions);
-                queryFrontendDefinitions(tree, filename, classDefinitions);
+                queryFrontendDefinitions(tree, globPath, filePath, classDefinitions);
                 frontendFileCount++;
             }
         } catch (error) {
-            console.error(`Error parsing ${filename}`, error);
+            console.error(`Error parsing ${filePath}`, error);
             process.exit(1);
         }
     });
