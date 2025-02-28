@@ -7,10 +7,15 @@ if (!pathToScan) {
     process.exit(1);
 }
 
-const {classUsages, classDefinitions} = await getClassData(pathToScan);
+const {classDefinitions} = await getClassData(pathToScan);
 
 // sort by namespace
-const classesSortedByNamespace = [...classDefinitions.entries()].sort((a, b) => b[1].namespace - a[1].namespace);
+const fileSortedByNamespace = [...classDefinitions.entries()].sort((a, b) => {
+    const aString = (a[1].namespace || a[1].fileName).toLowerCase();
+    const bString = (b[1].namespace || b[1].fileName).toLowerCase();
+
+    return bString.localeCompare(aString);
+});
 
 const domainBuckets = [...classDefinitions.entries()].reduce((acc, [filename, classInfo]) => {
     if (!acc.has(classInfo.domain)) {
@@ -45,7 +50,7 @@ const htmlReport = `<!doctype html>
         }
         th, td { 
             border: 1px solid #333; 
-            padding: 8px; 
+            padding: 8px;
             text-align: left; 
             vertical-align: top;
         }
@@ -72,16 +77,20 @@ const htmlReport = `<!doctype html>
         .domain-data-services {
             background-color: purple;
         }
+        .domain-innovation {
+            background-color: purple;
+        }
     </style>
 </head>
 <body>
-    <h1>Shopware Architecture Report</h1>
+    <h1>Shopware domain split report</h1>
     <h2>Summary</h2>
     <table>
         <thead>
             <tr>
                 <th>Domain</th>
                 <th>File count</th>
+                <th>Percentage</th>
             </tr>
         </thead>
         <tbody>
@@ -89,26 +98,29 @@ const htmlReport = `<!doctype html>
                 <tr>
                     <td class="domain-${(domain || 'unknown').replace('@', '--')}">${domain || 'unknown'}</td>
                     <td>${classList.length}</td>
+                    <td>${(classList.length / fileSortedByNamespace.length * 100.0).toFixed(2)}%</td>
                 </tr>`).join('')}
         </tbody>
     </table>
     
-    <h2>All classes with their domain (${classesSortedByNamespace.length})</h2>
+    <h2>All files with their domain (${fileSortedByNamespace.length})</h2>
+    <p>Look out for anomalies where the domain changes inside the same namespace.</p>
+    
     <table>
         <thead>
             <tr>
                 <th>Domain</th>
-                <th>Namespace</th>
+                <th>Namespace / Path</th>
                 <th>Classname</th>
                 <th>Is Internal</th>
             </tr>
         </thead>
         <tbody>
-            ${classesSortedByNamespace.map(([classname, classInfo]) => `
+            ${fileSortedByNamespace.map(([classname, classInfo]) => `
                 <tr>
                     <td class="domain-${(classInfo.domain || 'unknown').replace('@', '--')}">${classInfo.domain || 'unknown'}</td>
-                    <td>${classInfo.namespace}</td>
-                    <td>${classInfo.className}</td>
+                    <td>${classInfo.namespace || classInfo.fileName}</td>
+                    <td>${classInfo.className || 'N/A'}</td>
                     <td>${classInfo.isInternal ? 'Yes' : 'No'}</td>
                 </tr>`).join('')}
         </tbody>
@@ -117,7 +129,7 @@ const htmlReport = `<!doctype html>
 </html>`;
 
 try {
-    const reportPath = './out/sw-architecture-report.html';
+    const reportPath = './out/sw-domain-split-report.html';
     fs.writeFileSync(reportPath, htmlReport);
     console.log("html report written to", reportPath);
 } catch (err) {

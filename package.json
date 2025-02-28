@@ -13,6 +13,7 @@
   "dependencies": {
     "globby": "^14.1.0",
     "tree-sitter": "^0.21.1",
-    "tree-sitter-php": "^0.23.11"
+    "tree-sitter-php": "^0.23.11",
+    "tree-sitter-typescript": "^0.23.2"
   }
 }

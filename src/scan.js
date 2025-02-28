@@ -1,11 +1,13 @@
 import Parser, {Query} from 'tree-sitter';
 import TreeSitterPhp from 'tree-sitter-php';
+import TreeSitterTypescript from 'tree-sitter-typescript';
 import {globbyStream} from 'globby';
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 // setup tree-sitter parser for PHP
 const Php = TreeSitterPhp.php;
+const TypeScript = TreeSitterTypescript.typescript;
 const parser = new Parser();
 parser.setLanguage(Php);
 const parseOptions = {
@@ -21,11 +23,6 @@ const parseOptions = {
 //
 // A good place to start is playing with them in the "playground"
 // https://tree-sitter.github.io/tree-sitter/7-playground.html
-//
-// Note: This query is very simple and doesn't catch usages of classes in the same namespace!
-const useQuery = new Query(Php, `(qualified_name) @type`);
-
-// They can also get quite complicated just as SQL Queries :p
 const classDefinitionQuery = new Query(Php, `(
   (namespace_definition
     name: (namespace_name) @namespace
@@ -51,18 +48,14 @@ const classDefinitionQuery = new Query(Php, `(
     name: (name) @classname
   )
 )`);
-
-/**
- * Data storage for efficient used class lookup by full name (including namespace).
- * The value are all files in which the class is used.
- *
- * @typedef ClassUsages {Map<string, string[]>}
- */
+const frontendDefinitionQuery = new Query(TypeScript, `(program 
+   (comment) @comment
+)`);
 
 /**
  * Data storage for efficient class lookup by full name (including namespace).
  *
- * @typedef ClassDefinitions {Map<string, {
+ * @typedef Definitions {Map<string, {
  *    isInternal: boolean,
  *    namespace: string,
  *    className: string,
@@ -70,19 +63,6 @@ const classDefinitionQuery = new Query(Php, `(
  *    domain: string | undefined
  * }>}
  */
-
-function queryClassUsages(tree, filename, resultMap) {
-    const queryCaptures = useQuery.captures(tree.rootNode);
-    const uses = queryCaptures.map(c => c.node.text);
-
-    uses.forEach(u => {
-        if (!resultMap.has(u)) {
-            resultMap.set(u, []);
-        }
-
-        resultMap.get(u).push(filename);
-    });
-}
 
 function queryClassDefinitions(tree, fileName, resultMap) {
     const queryCaptures = classDefinitionQuery.captures(tree.rootNode);
@@ -104,12 +84,36 @@ function queryClassDefinitions(tree, fileName, resultMap) {
     });
 }
 
+function queryFrontendDefinitions(tree, fileName, resultMap) {
+    const queryCaptures = frontendDefinitionQuery.captures(tree.rootNode);
+
+    const topLevelComments = queryCaptures.filter(c => c.name === 'comment');
+    const isInternal = topLevelComments.some(c =>
+        c.node.text.includes('@internal') ||
+        c.node.text.includes('@private'
+        ));
+
+    const domainRegex = /@sw-package ([a-zA-Z-@]+)/;
+    const domain = topLevelComments.map(c => c.node.text.match(domainRegex))
+        .find(match => match)?.[1] || null;
+
+    resultMap.set(fileName, {
+        isInternal,
+        namespace: null,
+        className: null,
+        fileName,
+        domain,
+    });
+}
+
 async function scanFiles(dir, callback) {
     const paths = globbyStream([
         '**/*.php',
-        '!**/{T,t}est{,s}/**/*.php', // exclude any test directories
-        '!**/node_modules/**/*.php', // just to be safe (globby already respects .gitignore files)
-        '!**/vendor/**/*.php'
+        '**/*.{j,t}s',
+        '!**/*.spec.{j,t}s',
+        '!**/{T,t}est{,s}/**/*', // exclude any test directories
+        '!**/node_modules/**/*', // just to be safe (globby already respects .gitignore files)
+        '!**/vendor/**/*'
     ], {
         gitignore: true,
         cwd: dir,
@@ -132,27 +136,36 @@ async function scan(pathToScan) {
     console.log('scanning', pathToScan)
     console.log('scanning files, this might take a few seconds...');
 
-    let fileCount = 0;
-    /** @type {ClassUsages} */
-    const classUsages = new Map();
-    /** @type {ClassDefinitions} */
+    let phpFileCount = 0;
+    let frontendFileCount = 0;
+    /** @type {Definitions} */
     const classDefinitions = new Map();
     await scanFiles(pathToScan, (filename, content) => {
         try {
-            const tree = parser.parse(content, undefined, parseOptions);
-            fileCount++;
-            queryClassDefinitions(tree, filename, classDefinitions);
-            queryClassUsages(tree, filename, classUsages);
+            const filetype = path.extname(filename);
+
+            if (filetype === '.php') {
+                parser.setLanguage(Php);
+                const tree = parser.parse(content, undefined, parseOptions);
+                queryClassDefinitions(tree, filename, classDefinitions);
+                phpFileCount++;
+            } else if (['.js', '.ts'].includes(filetype)) {
+                parser.setLanguage(TypeScript);
+                const tree = parser.parse(content, undefined, parseOptions);
+                queryFrontendDefinitions(tree, filename, classDefinitions);
+                frontendFileCount++;
+            }
         } catch (error) {
             console.error(`Error parsing ${filename}`, error);
             process.exit(1);
         }
     });
-    console.log('scanned files:', fileCount);
+    console.log('scanned files:', phpFileCount + frontendFileCount);
+    console.log('scanned PHP files:', phpFileCount);
+    console.log('scanned JS/TS files:', frontendFileCount);
     console.log('found classes:', classDefinitions.size);
-    console.log('found class usages:', classUsages.size);
 
-    return {classUsages, classDefinitions};
+    return {classDefinitions};
 }
 
 const cacheFilePath = "./out/scan-cache.json";
@@ -163,7 +176,6 @@ function loadCache() {
         console.log("Found cached scan results. Remove this file if you want to rescan source files:", cacheFilePath);
         const data = JSON.parse(cacheFile);
         return {
-            classUsages: new Map(data.classUsages),
             classDefinitions: new Map(data.classDefinitions),
         };
     } catch (e) {
@@ -171,9 +183,8 @@ function loadCache() {
     }
 }
 
-function saveCache(classUsages, classDefinitions) {
+function saveCache(classDefinitions) {
     fs.writeFileSync(cacheFilePath, JSON.stringify({
-        classUsages: Array.from(classUsages.entries()),
         classDefinitions: Array.from(classDefinitions.entries()),
     }));
     console.log("Cache saved to", cacheFilePath);
@@ -181,13 +192,13 @@ function saveCache(classUsages, classDefinitions) {
 
 /**
  * @param {string} pathToScan
- * @returns {Promise<{classUsages: ClassUsages, classDefinitions: ClassDefinitions}>}
+ * @returns {Promise<{classDefinitions: Definitions}>}
  */
 export async function getClassData(pathToScan) {
     const cachedData = loadCache();
     if (cachedData) return cachedData;
 
     const scanData = await scan(pathToScan);
-    saveCache(scanData.classUsages, scanData.classDefinitions);
+    saveCache(scanData.classDefinitions);
     return scanData;
 }
